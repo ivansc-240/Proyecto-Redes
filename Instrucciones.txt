@@ -1,9 +1,9 @@
 @echo off
 
-:: Configurar rutas de MSYS2 UCRT64
+:: Configurar rutas de MSYS2 UCRT64 y Npcap
 set PATH=C:\msys64\ucrt64\bin;%PATH%
-set NPCAP_INCLUDE=C:\Npcap-sdk\Include
-set NPCAP_LIB=C:\Npcap-sdk\Lib\x64
+set NPCAP_INCLUDE=C:\msys64\ucrt64\include
+set NPCAP_LIB=C:\msys64\ucrt64\lib
 
 echo Compilando sniffer.exe...
 
@@ -16,7 +16,7 @@ g++ -std=c++17 -O2 -Wall ^
     imgui/imgui_demo.cpp ^
     imgui/backends/imgui_impl_glfw.cpp ^
     imgui/backends/imgui_impl_opengl3.cpp ^
-    -I. -Iimgui -I"%NPCAP_INCLUDE%" ^
+    -I. -I"%NPCAP_INCLUDE%" ^
     -L"%NPCAP_LIB%" ^
     -lglfw3 -lopengl32 -lgdi32 -lwpcap -lws2_32 ^
     -mwindows ^
