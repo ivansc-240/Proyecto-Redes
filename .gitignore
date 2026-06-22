@@ -5,3 +5,4 @@
 .vscode/
 # Archivos de configuración de usuario de ImGui
 imgui.ini
+reporte_ids_*.txt
