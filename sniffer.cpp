@@ -47,6 +47,7 @@
 #include <cstring>
 #include <cmath>
 #include <algorithm>
+#include <chrono>
 
 // DECLARACIONES SELECTIVAS (Cero riesgo de colisión)
 using std::string;
@@ -57,6 +58,9 @@ using std::atomic;
 using std::thread;
 using std::ostringstream;
 using std::ofstream;
+using std::chrono::steady_clock;
+using std::chrono::duration_cast;
+using std::chrono::seconds;
 using std::setw;
 using std::setfill;
 using std::hex;
@@ -154,6 +158,20 @@ atomic<bool>             g_capturando{false};
 
 // Número de secuencia monotónico de frames. Incrementado atómicamente en manejador_paquete().
 atomic<int>              g_contador_paquetes{0};
+
+// ── IDS Pasivo: SYN Flood ────────────────────────────────────────────
+// Contador de paquetes TCP-SYN en la ventana de muestreo activa.
+atomic<int>       g_syn_contador{0};
+
+// Marca de tiempo UNIX (segundos) del inicio de la ventana actual.
+atomic<long long> g_syn_ultimo_reset{0};
+
+// Umbral: más de 50 SYN en 10 segundos dispara la alerta.
+constexpr int     SYN_UMBRAL         = 50;
+constexpr int     SYN_VENTANA_SEG    = 10;
+
+// Toggle de tema visual: true = oscuro, false = claro.
+bool g_tema_oscuro = true;
 
 // Handle de pcap propiedad del hilo de captura. El hilo de renderizado lo usa únicamente
 // para llamar a pcap_breakloop() al detener. pcap_breakloop() es segura para señales y reentrante.
@@ -312,7 +330,7 @@ void manejador_paquete(u_char* /*user*/, const struct pcap_pkthdr* pkthdr, const
         decodificado << "  Total     : " << ntohs(ip->longitud_total) << " bytes\n";
 
         const uint8_t* l4     = l3 + ihl;
-        int            lon_l4 = lon_l3 - ihl;
+        int            lon_l4 = lon_l3 - ihl;        
 
         if (ip->proto == 6 && lon_l4 >= (int)sizeof(CabeceraTCP)) {
             // TCP — RFC 793
@@ -324,11 +342,13 @@ void manejador_paquete(u_char* /*user*/, const struct pcap_pkthdr* pkthdr, const
             uint8_t f = tcp->flags;
             string  flags_str;
             if (f & 0x02) flags_str += "SYN ";
+            if (f & 0x02) g_syn_contador.fetch_add(1, std::memory_order_relaxed);
             if (f & 0x10) flags_str += "ACK ";
             if (f & 0x01) flags_str += "FIN ";
             if (f & 0x04) flags_str += "RST ";
             if (f & 0x08) flags_str += "PSH ";
             if (f & 0x20) flags_str += "URG ";
+            
 
             decodificado << "\n[TCP]\n";
             decodificado << "  Puerto Origen : " << pkt.puerto_origen  << "\n";
@@ -548,7 +568,9 @@ static void renderizar_tabla_paquetes(ImVec2 tamanio) {
     }
 
     // Barra de filtros
-    ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.15f, 0.15f, 0.18f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_FrameBg,
+    g_tema_oscuro ? ImVec4(0.15f, 0.15f, 0.18f, 1.0f)    // oscuro
+                  : ImVec4(0.88f, 0.88f, 0.92f, 1.0f));  // claro
 
     ImGui::SetNextItemWidth(130);
     ImGui::InputText("##f_ip_origen", g_filtros.ip_origen, sizeof(g_filtros.ip_origen));
@@ -582,9 +604,9 @@ static void renderizar_tabla_paquetes(ImVec2 tamanio) {
 
     // Botón Exportar CSV
     ImGui::SameLine(0, 16);
-    ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.15f, 0.40f, 0.15f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.20f, 0.55f, 0.20f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.10f, 0.45f, 0.10f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_Button, g_tema_oscuro ? ImVec4(0.15f, 0.40f, 0.15f, 1.0f) : ImVec4(0.20f, 0.60f, 0.20f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, g_tema_oscuro ? ImVec4(0.20f, 0.55f, 0.20f, 1.0f) : ImVec4(0.25f, 0.72f, 0.25f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, g_tema_oscuro ? ImVec4(0.10f, 0.45f, 0.10f, 1.0f) : ImVec4(0.15f, 0.55f, 0.15f, 1.0f));
     if (ImGui::Button("Exportar CSV")) {
         ostringstream nombre_archivo;
         nombre_archivo << "captura_" << (int)glfwGetTime() << ".csv";
@@ -737,6 +759,30 @@ static void callback_error_glfw(int error, const char* desc) {
     fprintf(stderr, "GLFW Error %d: %s\n", error, desc);
 }
 
+// Aplica el tema oscuro o claro con los ajustes de color del proyecto.
+// Llamar cada vez que g_tema_oscuro cambie.
+static void aplicar_tema(bool oscuro) {
+    if (oscuro) {
+        ImGui::StyleColorsDark();
+        ImGuiStyle& e = ImGui::GetStyle();
+        e.Colors[ImGuiCol_WindowBg]      = ImVec4(0.10f, 0.10f, 0.12f, 1.0f);
+        e.Colors[ImGuiCol_Header]        = ImVec4(0.20f, 0.40f, 0.60f, 0.6f);
+        e.Colors[ImGuiCol_HeaderHovered] = ImVec4(0.25f, 0.50f, 0.75f, 0.8f);
+        e.Colors[ImGuiCol_HeaderActive]  = ImVec4(0.30f, 0.55f, 0.80f, 1.0f);
+    } else {
+        ImGui::StyleColorsLight();
+        ImGuiStyle& e = ImGui::GetStyle();
+        e.Colors[ImGuiCol_WindowBg]      = ImVec4(0.94f, 0.94f, 0.96f, 1.0f);
+        e.Colors[ImGuiCol_Header]        = ImVec4(0.50f, 0.70f, 0.90f, 0.6f);
+        e.Colors[ImGuiCol_HeaderHovered] = ImVec4(0.40f, 0.65f, 0.88f, 0.8f);
+        e.Colors[ImGuiCol_HeaderActive]  = ImVec4(0.30f, 0.55f, 0.80f, 1.0f);
+    }
+    // Preserva los radios de esquina del proyecto en ambos temas.
+    ImGuiStyle& e = ImGui::GetStyle();
+    e.WindowRounding    = 4.0f;
+    e.FrameRounding     = 3.0f;
+    e.ScrollbarRounding = 3.0f;
+}
 
 /*
  * main — inicializa la capa de plataforma (WinSock2, GLFW, OpenGL 3.3 Core),
@@ -756,6 +802,7 @@ static void callback_error_glfw(int error, const char* desc) {
  *   Señaliza al hilo de captura con g_capturando = false + pcap_breakloop(),
  *   lo une y destruye los recursos de ImGui y GLFW en orden de dependencia.
  */
+
 int main() {
 #ifdef _WIN32
     WSADATA wsa;
@@ -787,16 +834,8 @@ int main() {
     // Nota: ImGuiConfigFlags_DockingEnable solo está disponible en la rama docking.
     // Se usa disposición manual con ChildWindows para compatibilidad con la rama master.
 
-    // Tema oscuro con ajustes de color inspirados en Wireshark.
-    ImGui::StyleColorsDark();
-    ImGuiStyle& estilo = ImGui::GetStyle();
-    estilo.WindowRounding    = 4.0f;
-    estilo.FrameRounding     = 3.0f;
-    estilo.ScrollbarRounding = 3.0f;
-    estilo.Colors[ImGuiCol_WindowBg]       = ImVec4(0.10f, 0.10f, 0.12f, 1.0f);
-    estilo.Colors[ImGuiCol_Header]         = ImVec4(0.20f, 0.40f, 0.60f, 0.6f);
-    estilo.Colors[ImGuiCol_HeaderHovered]  = ImVec4(0.25f, 0.50f, 0.75f, 0.8f);
-    estilo.Colors[ImGuiCol_HeaderActive]   = ImVec4(0.30f, 0.55f, 0.80f, 1.0f);
+    // Tema inicial: oscuro.
+    aplicar_tema(g_tema_oscuro);
 
     ImGui_ImplGlfw_InitForOpenGL(ventana, true);
     ImGui_ImplOpenGL3_Init("#version 330");
@@ -862,7 +901,10 @@ int main() {
 
             // Barra de menú
             if (ImGui::BeginMenuBar()) {
-                ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.6f, 1.0f), "Packet Sniffer");
+                ImGui::TextColored(g_tema_oscuro ? 
+                ImVec4(0.4f, 0.9f, 0.6f, 1.0f)   // verde sobre oscuro
+                : ImVec4(0.0f, 0.45f, 0.20f, 1.0f), // verde oscuro sobre claro                         
+                "Packet Sniffer");
                 ImGui::Separator();
 
                 // Combo de selección de interfaz de red
@@ -915,7 +957,9 @@ int main() {
                     ImGui::SameLine();
                     float t     = (float)glfwGetTime();
                     float alpha = 0.5f + 0.5f * std::sin(t * 4.0f);
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.2f, 1.0f, 0.3f, alpha));
+                    ImGui::PushStyleColor(ImGuiCol_Text,
+                    g_tema_oscuro ? ImVec4(0.2f, 1.0f, 0.3f, alpha) // verde fosforescente sobre oscuro
+                    : ImVec4(0.0f, 0.50f, 0.15f, alpha));           // verde oscuro sobre claro
                     ImGui::Text("* CAPTURANDO");
                     ImGui::PopStyleColor();
                 }
@@ -924,7 +968,67 @@ int main() {
                 ImGui::Separator();
                 if (ImGui::SmallButton("Recargar interfaces")) cargar_interfaces();
 
+                ImGui::SameLine();
+                ImGui::Separator();
+                // Icono cambia según el tema activo para retroalimentación visual inmediata.
+                const char* etiq_tema = g_tema_oscuro ? "  Modo Claro" : "  Modo Oscuro";
+                if (ImGui::SmallButton(etiq_tema)) {
+                    g_tema_oscuro = !g_tema_oscuro;
+                    aplicar_tema(g_tema_oscuro);
+                }
+
+                // ── IDS: reseteo de ventana de muestreo ─────────────────────────
+                {
+                    long long ahora  = duration_cast<seconds>(
+                        steady_clock::now().time_since_epoch()).count();
+                    long long ultimo = g_syn_ultimo_reset.load(std::memory_order_relaxed);
+
+                    if (ultimo == 0)
+                        g_syn_ultimo_reset.store(ahora, std::memory_order_relaxed);
+                    else if (ahora - ultimo >= SYN_VENTANA_SEG) {
+                        g_syn_contador.store(0, std::memory_order_relaxed);
+                        g_syn_ultimo_reset.store(ahora, std::memory_order_relaxed);
+                    }
+                }
+
+                // ── IDS: widget de estado + botón de reseteo ────────────────────
+                ImGui::Separator();
+                int syn_actual = g_syn_contador.load(std::memory_order_relaxed);
+                ImGui::TextColored(
+                syn_actual > SYN_UMBRAL
+                ? ImVec4(0.9f, 0.1f, 0.1f, 1.0f)                      // rojo: igual en ambos temas
+                : (g_tema_oscuro ? ImVec4(0.5f, 0.9f, 0.5f, 1.0f)     // verde claro sobre oscuro
+                                 : ImVec4(0.0f, 0.45f, 0.10f, 1.0f)), // verde oscuro sobre claro
+                "SYN: %d/%d (%ds)", syn_actual, SYN_UMBRAL, SYN_VENTANA_SEG);
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Restablecer")) {
+                    g_syn_contador.store(0, std::memory_order_relaxed);
+                    g_syn_ultimo_reset.store(
+                        duration_cast<seconds>(
+                            steady_clock::now().time_since_epoch()).count(),
+                        std::memory_order_relaxed);
+                }
                 ImGui::EndMenuBar();
+            }
+
+            // ── IDS: banner de alerta parpadeante ───────────────────────────────
+            if (g_syn_contador.load(std::memory_order_relaxed) > SYN_UMBRAL) {
+                // Parpadeo a 1 Hz: visible el 50 % del tiempo
+                bool visible = std::fmod((float)glfwGetTime(), 1.0f) > 0.5f;
+                if (visible) {
+                    ImVec2 pos = ImGui::GetCursorScreenPos();
+                    float  w   = ImGui::GetContentRegionAvail().x;
+                    ImGui::GetWindowDrawList()->AddRectFilled(
+                        pos, ImVec2(pos.x + w, pos.y + 36.0f),
+                        IM_COL32(200, 0, 0, 255));
+                    ImGui::SetCursorScreenPos(ImVec2(pos.x + 8.0f, pos.y + 8.0f));
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 1, 1, 1));
+                    ImGui::Text("  [!] ALERTA DE SEGURIDAD: Posible ataque DoS / SYN Flood Detectado");
+                    ImGui::PopStyleColor();
+                    ImGui::SetCursorScreenPos(ImVec2(pos.x, pos.y + 40.0f)); // avanza el cursor
+                } else {
+                    ImGui::Dummy(ImVec2(0.0f, 36.0f)); // reserva espacio para no saltar el layout
+                }
             }
 
             // Disposición de 3 paneles con ChildWindows

@@ -3,3 +3,5 @@
 *.obj
 *.csv
 .vscode/
+# Archivos de configuración de usuario de ImGui
+imgui.ini
