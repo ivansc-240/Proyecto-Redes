@@ -68,8 +68,7 @@ pacman -S mingw-w64-ucrt-x86_64-glfw
 
 ### 4. OpenGL
 
-OpenGL viene incluido con los drivers de tu tarjeta gráfica. No requiere instalación
-adicional en Windows. El paquete de MSYS2 que provee los headers es:
+OpenGL no requiere instalación adicional en Windows. El paquete de MSYS2 que provee los headers es:
 
 ```bash
 pacman -S mingw-w64-ucrt-x86_64-mesa
