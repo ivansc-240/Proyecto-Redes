@@ -7,7 +7,7 @@ set NPCAP_LIB=C:\Npcap-sdk\Lib\x64
 
 echo Compilando sniffer.exe...
 
-g++ -std=c++17 -O2 -Wall ^
+g++ -std=c++17 -O2 -Wall -Wno-unused-function ^
     sniffer.cpp ^
     imgui/imgui.cpp ^
     imgui/imgui_draw.cpp ^

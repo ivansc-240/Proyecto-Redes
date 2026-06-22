@@ -662,7 +662,8 @@ static void renderizar_tabla_paquetes(ImVec2 tamanio) {
             if (!paquete_cumple_filtros(p)) continue;
 
             ImGui::TableNextRow();
-
+        
+        #if 0
             // ── IDS: Color de fondo rojo para IPs atacantes, protocolo para el resto ──
             bool es_atacante = false;
             if (g_syn_contador.load(std::memory_order_relaxed) > SYN_UMBRAL
@@ -682,6 +683,7 @@ static void renderizar_tabla_paquetes(ImVec2 tamanio) {
                     ImGui::ColorConvertFloat4ToU32(
                         ImVec4(col_fila.x, col_fila.y, col_fila.z, 0.35f)));
             }
+        #endif
 
             ImGui::TableSetColumnIndex(0);
             char etiq_sel[32];
@@ -1052,6 +1054,7 @@ int main() {
                     aplicar_tema(g_tema_oscuro);
                 }
 
+                #if 0
                 // ── IDS: reseteo de ventana de muestreo ─────────────────────────
                 {
                     long long ahora  = duration_cast<seconds>(
@@ -1098,9 +1101,11 @@ int main() {
                     lock_guard<mutex> lk_syn(g_mutex_syn);
                     g_syn_por_ip.clear();
                 }
+                #endif
                 ImGui::EndMenuBar();
             }
 
+            #if 0
             // ── IDS: banner de alerta parpadeante ───────────────────────────────
             if (g_syn_contador.load(std::memory_order_relaxed) > SYN_UMBRAL) {
                 // Parpadeo a 1 Hz: visible el 50 % del tiempo
@@ -1120,6 +1125,7 @@ int main() {
                     ImGui::Dummy(ImVec2(0.0f, 36.0f)); // reserva espacio para no saltar el layout
                 }
             }
+            #endif
 
             // Disposición de 3 paneles con ChildWindows
             ImVec2 disponible = ImGui::GetContentRegionAvail();
