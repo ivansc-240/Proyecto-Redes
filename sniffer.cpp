@@ -47,6 +47,7 @@
 #include <cstring>
 #include <cmath>
 #include <algorithm>
+#include <unordered_map>
 #include <chrono>
 
 // DECLARACIONES SELECTIVAS (Cero riesgo de colisión)
@@ -70,6 +71,7 @@ using std::setprecision;
 using std::to_string;
 using std::move;
 using std::transform;
+using std::unordered_map;
 
 // Dear ImGui
 #include "imgui/imgui.h"
@@ -169,6 +171,11 @@ atomic<long long> g_syn_ultimo_reset{0};
 // Umbral: más de 50 SYN en 10 segundos dispara la alerta.
 constexpr int     SYN_UMBRAL         = 50;
 constexpr int     SYN_VENTANA_SEG    = 10;
+
+// Mapa IP origen -> conteo de SYN. Protegido por g_mutex_syn.
+// Separado de g_mutex_paquetes para no bloquear la tabla durante el conteo.
+unordered_map<string, int> g_syn_por_ip;
+mutex                      g_mutex_syn;
 
 // Toggle de tema visual: true = oscuro, false = claro.
 bool g_tema_oscuro = true;
@@ -343,6 +350,10 @@ void manejador_paquete(u_char* /*user*/, const struct pcap_pkthdr* pkthdr, const
             string  flags_str;
             if (f & 0x02) flags_str += "SYN ";
             if (f & 0x02) g_syn_contador.fetch_add(1, std::memory_order_relaxed);
+            if (f & 0x02) {
+                lock_guard<mutex> lk_syn(g_mutex_syn);
+                g_syn_por_ip[pkt.ip_origen]++;
+            }
             if (f & 0x10) flags_str += "ACK ";
             if (f & 0x01) flags_str += "FIN ";
             if (f & 0x04) flags_str += "RST ";
@@ -650,11 +661,25 @@ static void renderizar_tabla_paquetes(ImVec2 tamanio) {
 
             ImGui::TableNextRow();
 
-            // Color de fondo de fila: color de protocolo al 35% de alfa para legibilidad.
-            ImVec4 col_fila = color_protocolo(p.protocolo);
-            ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,
-                ImGui::ColorConvertFloat4ToU32(
-                    ImVec4(col_fila.x, col_fila.y, col_fila.z, 0.35f)));
+            // ── IDS: Color de fondo rojo para IPs atacantes, protocolo para el resto ──
+            bool es_atacante = false;
+            if (g_syn_contador.load(std::memory_order_relaxed) > SYN_UMBRAL
+                && !p.ip_origen.empty()) {
+                lock_guard<mutex> lk_syn(g_mutex_syn);
+                auto it = g_syn_por_ip.find(p.ip_origen);
+                if (it != g_syn_por_ip.end() && it->second > (SYN_UMBRAL / 2))
+                    es_atacante = true;
+            }
+
+            if (es_atacante) {
+                ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,
+                    IM_COL32(180, 30, 30, 120));
+            } else {
+                ImVec4 col_fila = color_protocolo(p.protocolo);
+                ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,
+                    ImGui::ColorConvertFloat4ToU32(
+                        ImVec4(col_fila.x, col_fila.y, col_fila.z, 0.35f)));
+            }
 
             ImGui::TableSetColumnIndex(0);
             char etiq_sel[32];
@@ -757,6 +782,54 @@ static void renderizar_panel_hex(ImVec2 tamanio) {
 // Manejador de errores de GLFW registrado mediante glfwSetErrorCallback().
 static void callback_error_glfw(int error, const char* desc) {
     fprintf(stderr, "GLFW Error %d: %s\n", error, desc);
+}
+
+// Genera un reporte .txt del evento de SYN Flood detectado.
+// Incluye timestamp, conteo total, umbral y ranking de IPs atacantes.
+// Se llama automaticamente cuando el contador supera el umbral por primera vez.
+static void generar_reporte_ids() {
+    // Nombre de archivo con timestamp para no sobreescribir reportes anteriores
+    long long ahora = duration_cast<seconds>(
+        steady_clock::now().time_since_epoch()).count();
+    string ruta = "reporte_ids_" + to_string(ahora) + ".txt";
+
+    ofstream f(ruta);
+    if (!f.is_open()) return;
+
+    // Encabezado
+    f << "========================================================\n";
+    f << "   REPORTE DE ALERTA IDS - POSIBLE ATAQUE SYN FLOOD\n";
+    f << "========================================================\n\n";
+    f << "Timestamp (UNIX) : " << ahora << "\n";
+    f << "SYN detectados   : " << g_syn_contador.load(std::memory_order_relaxed) << "\n";
+    f << "Umbral configurado: " << SYN_UMBRAL << "\n";
+    f << "Ventana de muestreo: " << SYN_VENTANA_SEG << " segundos\n\n";
+
+    // Ranking de IPs atacantes
+    f << "--------------------------------------------------------\n";
+    f << "  RANKING DE IPs POR CONTEO DE PAQUETES SYN\n";
+    f << "--------------------------------------------------------\n";
+
+    // Copiar el mapa a un vector para ordenarlo sin mantener el lock
+    vector<std::pair<string, int>> ranking;
+    {
+        lock_guard<mutex> lk_syn(g_mutex_syn);
+        ranking.assign(g_syn_por_ip.begin(), g_syn_por_ip.end());
+    }
+
+    // Ordenar de mayor a menor conteo
+    std::sort(ranking.begin(), ranking.end(),
+        [](const auto& a, const auto& b){ return a.second > b.second; });
+
+    if (ranking.empty()) {
+        f << "  (Sin datos de IP disponibles)\n";
+    } else {
+        int pos = 1;
+        for (const auto& par : ranking) {
+            f << "  " << pos++ << ". " << par.first
+              << "  ->  " << par.second << " paquetes SYN\n";
+        }
+    }
 }
 
 // Aplica el tema oscuro o claro con los ajustes de color del proyecto.
@@ -959,7 +1032,7 @@ int main() {
                     float alpha = 0.5f + 0.5f * std::sin(t * 4.0f);
                     ImGui::PushStyleColor(ImGuiCol_Text,
                     g_tema_oscuro ? ImVec4(0.2f, 1.0f, 0.3f, alpha) // verde fosforescente sobre oscuro
-                    : ImVec4(0.0f, 0.50f, 0.15f, alpha));           // verde oscuro sobre claro
+                    : ImVec4(0.0f, 0.50f, 0.15f, alpha));           // verde oscuro sobre claro 
                     ImGui::Text("* CAPTURANDO");
                     ImGui::PopStyleColor();
                 }
@@ -988,18 +1061,31 @@ int main() {
                     else if (ahora - ultimo >= SYN_VENTANA_SEG) {
                         g_syn_contador.store(0, std::memory_order_relaxed);
                         g_syn_ultimo_reset.store(ahora, std::memory_order_relaxed);
+                        lock_guard<mutex> lk_syn(g_mutex_syn);
+                        g_syn_por_ip.clear();
                     }
                 }
 
                 // ── IDS: widget de estado + botón de reseteo ────────────────────
                 ImGui::Separator();
                 int syn_actual = g_syn_contador.load(std::memory_order_relaxed);
+                bool alerta_activa = syn_actual > SYN_UMBRAL;
+
+                // Genera el reporte automaticamente la primera vez que se supera
+                // el umbral en esta ventana. La bandera evita generar uno por frame.
+                static bool reporte_generado = false;
+                if (alerta_activa && !reporte_generado) {
+                    generar_reporte_ids();
+                    reporte_generado = true;
+                }
+                if (!alerta_activa) reporte_generado = false;
+
                 ImGui::TextColored(
-                syn_actual > SYN_UMBRAL
-                ? ImVec4(0.9f, 0.1f, 0.1f, 1.0f)                      // rojo: igual en ambos temas
-                : (g_tema_oscuro ? ImVec4(0.5f, 0.9f, 0.5f, 1.0f)     // verde claro sobre oscuro
-                                 : ImVec4(0.0f, 0.45f, 0.10f, 1.0f)), // verde oscuro sobre claro
-                "SYN: %d/%d (%ds)", syn_actual, SYN_UMBRAL, SYN_VENTANA_SEG);
+                    alerta_activa
+                    ? ImVec4(0.9f, 0.1f, 0.1f, 1.0f)
+                    : (g_tema_oscuro ? ImVec4(0.5f, 0.9f, 0.5f, 1.0f)
+                                     : ImVec4(0.0f, 0.45f, 0.10f, 1.0f)),
+                    "SYN: %d/%d (%ds)", syn_actual, SYN_UMBRAL, SYN_VENTANA_SEG);
                 ImGui::SameLine();
                 if (ImGui::SmallButton("Restablecer")) {
                     g_syn_contador.store(0, std::memory_order_relaxed);
@@ -1007,6 +1093,8 @@ int main() {
                         duration_cast<seconds>(
                             steady_clock::now().time_since_epoch()).count(),
                         std::memory_order_relaxed);
+                    lock_guard<mutex> lk_syn(g_mutex_syn);
+                    g_syn_por_ip.clear();
                 }
                 ImGui::EndMenuBar();
             }
