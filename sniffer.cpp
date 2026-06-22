@@ -566,7 +566,9 @@ static void renderizar_tabla_paquetes(ImVec2 tamanio) {
     ImGui::BeginChild("PacketTable", tamanio, true);
 
     // Barra de estado
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.9f, 0.9f, 0.9f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_Text,
+    g_tema_oscuro ? ImVec4(0.9f, 0.9f, 0.9f, 1.0f)   // gris claro sobre oscuro
+                  : ImVec4(0.1f, 0.1f, 0.1f, 1.0f));  // gris oscuro sobre claro
     ImGui::Text("  Paquetes capturados: %d", g_contador_paquetes.load());
     ImGui::PopStyleColor();
 
