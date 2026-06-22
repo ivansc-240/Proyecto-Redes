@@ -11,13 +11,10 @@
 5. [Panel 1 — Tabla de paquetes](#5-panel-1--tabla-de-paquetes)
 6. [Panel 2 — Detalle del paquete](#6-panel-2--detalle-del-paquete)
 7. [Panel 3 — Hex Dump](#7-panel-3--hex-dump)
-8. [Sistema IDS — Detección de SYN Flood](#8-sistema-ids--detección-de-syn-flood)
-9. [Resaltado de IPs atacantes en la tabla](#9-resaltado-de-ips-atacantes-en-la-tabla)
-10. [Reporte automático de incidentes](#10-reporte-automático-de-incidentes)
-11. [Exportar a CSV](#11-exportar-a-csv)
-12. [Cambio de tema visual](#12-cambio-de-tema-visual)
-13. [Código de colores por protocolo](#13-código-de-colores-por-protocolo)
-14. [Preguntas frecuentes](#14-preguntas-frecuentes)
+8. [Exportar a CSV](#11-exportar-a-csv)
+9. [Cambio de tema visual](#12-cambio-de-tema-visual)
+10. [Código de colores por protocolo](#13-código-de-colores-por-protocolo)
+11. [Preguntas frecuentes](#14-preguntas-frecuentes)
 
 ---
 
@@ -77,11 +74,6 @@ La ventana ocupa toda la pantalla y se divide en tres paneles fijos:
 Los bordes de columna de la tabla son **arrastrables** para ajustar el ancho
 de cada columna según tus preferencias.
 
-Cuando el IDS detecta una posible inundación SYN, aparece además un **banner
-rojo parpadeante** justo debajo de la barra de menú (ver sección 8) y las
-filas de paquetes asociadas a las IPs responsables se resaltan en rojo dentro
-del Panel 1 (ver sección 9).
-
 ---
 
 ## 4. Barra de menú
@@ -97,7 +89,6 @@ La barra superior contiene, de izquierda a derecha:
 | **\* CAPTURANDO** | Indicador animado (parpadeo sinusoidal) visible solo durante la captura activa |
 | **Recargar interfaces** | Vuelve a enumerar los adaptadores de red del sistema. Útil si conectaste un adaptador después de abrir la aplicación |
 | **Modo Claro / Modo Oscuro** | Alterna el tema visual entre oscuro y claro |
-| **SYN: N/50 (10s)** | Contador del IDS en tiempo real (ver sección 8) |
 | **Restablecer** | Reinicia el contador SYN del IDS a cero |
 
 ### Flujo básico de uso
@@ -218,177 +209,7 @@ El panel es de **solo lectura** y tiene scroll vertical independiente.
 
 ---
 
-## 8. Sistema IDS — Detección de SYN Flood
-
-La aplicación incluye un sistema pasivo de detección de intrusos (IDS) que
-monitorea paquetes TCP con la bandera SYN activa para identificar posibles
-ataques de inundación (SYN Flood / DoS). Además de contar los SYN de forma
-global, el IDS lleva un registro **por IP origen**, lo que permite no solo
-saber que hay un posible ataque, sino también señalar de dónde proviene
-(secciones 9 y 10).
-
-### Cómo funciona
-
-- Cada paquete TCP-SYN detectado incrementa un contador interno global
-- En paralelo, se incrementa también un contador individual asociado a la IP
-  origen de ese paquete
-- Ambos contadores se reinician automáticamente cada **10 segundos** (ventana
-  de muestreo)
-- Si el contador global supera **50 paquetes SYN** dentro de la ventana, se
-  activa la alerta: aparece el banner rojo, las IPs más activas se resaltan
-  en la tabla (sección 9) y se genera un reporte automático (sección 10)
-
-### Indicador en la barra de menú
-
-El texto **SYN: N/50 (10s)** en la barra superior muestra en todo momento:
-
-- `N` — cantidad de paquetes SYN detectados en la ventana actual (conteo global)
-- `50` — umbral de alerta
-- `10s` — duración de la ventana de muestreo
-
-El color del texto cambia según el estado:
-
-| Color | Significado |
-|---|---|
-| Verde | Tráfico SYN normal, sin alerta |
-| Rojo | Umbral superado, posible ataque en curso |
-
-### Alerta visual
-
-Cuando el contador supera el umbral, aparece un **banner rojo parpadeante**
-debajo de la barra de menú con el mensaje:
-
-```
-[!] ALERTA DE SEGURIDAD: Posible ataque DoS / SYN Flood Detectado
-```
-
-El banner parpadea a 1 Hz (visible y oculto alternando cada medio segundo)
-para maximizar la visibilidad. Desaparece automáticamente cuando el contador
-baja del umbral al inicio de una nueva ventana de muestreo.
-
-### Botón Restablecer
-
-El botón **Restablecer** en la barra de menú pone a cero inmediatamente el
-contador global y los contadores por IP, e inicia una nueva ventana de
-muestreo, apagando la alerta (banner, resaltado en rojo) de forma manual sin
-necesidad de esperar los 10 segundos.
-
-> **Nota:** el IDS es de carácter educativo y pasivo. Detecta, resalta y
-> reporta, pero no bloquea tráfico. Un alto número de SYN puede tener causas
-> legítimas en redes con mucho tráfico (servidores web con muchas conexiones
-> simultáneas). Interpreta la alerta en contexto.
-
----
-
-## 9. Resaltado de IPs atacantes en la tabla
-
-Mientras la alerta del IDS está activa (contador global de SYN por encima del
-umbral), el Panel 1 deja de pintar algunas filas con el color habitual de
-protocolo y en su lugar las marca con un **fondo rojo** para destacar a las
-IPs responsables.
-
-### Cómo se decide qué filas se pintan en rojo
-
-Para cada paquete visible en la tabla (es decir, que ya pasó los filtros
-activos), la aplicación revisa cuántos paquetes SYN ha generado su IP origen
-dentro de la ventana de muestreo actual. Si esa IP por sí sola acumula **más
-de la mitad del umbral de alerta** (25 SYN de los 50 configurados por
-defecto), la fila se resalta en rojo. Las filas de paquetes cuya IP origen no
-alcanza ese nivel de actividad conservan su color normal por protocolo,
-incluso mientras la alerta global está activa.
-
-Esto significa que, durante un SYN Flood con múltiples orígenes mezclados en
-el mismo tráfico, solo se iluminan en rojo las IPs que realmente están
-contribuyendo de forma significativa al ataque, no todas las filas de la
-tabla.
-
-### Cuándo deja de verse el resaltado
-
-El color rojo desaparece de inmediato cuando:
-
-- El contador global de SYN vuelve a estar por debajo del umbral al iniciarse
-  una nueva ventana de muestreo, o
-- Se presiona el botón **Restablecer** en la barra de menú
-
-En ambos casos las filas vuelven a mostrarse con el color tenue habitual por
-protocolo (sección 13).
-
-> El resaltado es exclusivamente visual: no oculta, elimina ni modifica
-> ningún paquete. Los datos del Panel 2 y el volcado del Panel 3 siguen
-> disponibles con normalidad para cualquier paquete, esté o no resaltado.
-
----
-
-## 10. Reporte automático de incidentes
-
-Además de la alerta visual, la aplicación genera automáticamente un **reporte
-en texto plano** cada vez que el contador global de SYN supera el umbral por
-primera vez dentro de una ventana de alerta.
-
-### Cuándo se genera
-
-El reporte se crea exactamente una vez por cada vez que la alerta se dispara.
-Mientras el contador permanezca por encima del umbral no se generan reportes
-adicionales; si la alerta se apaga y vuelve a activarse más adelante (nueva
-ventana, o tras pulsar Restablecer y que el tráfico vuelva a superar el
-umbral), se genera un nuevo archivo independiente.
-
-### Dónde se guarda
-
-El archivo se guarda en la **misma carpeta donde se ejecuta `sniffer.exe`**,
-con el nombre:
-
-```
-reporte_ids_<timestamp_unix>.txt
-```
-
-El `timestamp_unix` corresponde al momento exacto en que se disparó la
-alerta, lo que evita que un reporte sobrescriba a otro generado en un
-incidente anterior.
-
-### Qué contiene
-
-El reporte incluye, en este orden:
-
-1. Un encabezado identificando el tipo de evento (SYN Flood)
-2. El timestamp UNIX del incidente
-3. La cantidad de paquetes SYN detectados en el momento de generarse el reporte
-4. El umbral configurado y la duración de la ventana de muestreo
-5. Un **ranking de IPs origen**, ordenado de mayor a menor número de paquetes
-   SYN, mostrando cada IP junto con su conteo dentro de la ventana
-
-Ejemplo de contenido:
-
-```
-========================================================
-   REPORTE DE ALERTA IDS - POSIBLE ATAQUE SYN FLOOD
-========================================================
-
-Timestamp (UNIX) : 1750000000
-SYN detectados   : 57
-Umbral configurado: 50
-Ventana de muestreo: 10 segundos
-
---------------------------------------------------------
-  RANKING DE IPs POR CONTEO DE PAQUETES SYN
---------------------------------------------------------
-  1. 203.0.113.45  ->  41 paquetes SYN
-  2. 198.51.100.7  ->  12 paquetes SYN
-  3. 192.0.2.9     ->  4 paquetes SYN
-```
-
-Si por alguna razón no hay direcciones IP disponibles asociadas a los SYN
-contados (por ejemplo, tramas truncadas), el reporte lo indica explícitamente
-en lugar del ranking.
-
-> El reporte es una fotografía del instante en que se disparó la alerta; no
-> se actualiza después. Si quieres un reporte con cifras más recientes del
-> mismo incidente prolongado, deja que la alerta se apague (Restablecer o fin
-> de ventana) y permite que se vuelva a disparar.
-
----
-
-## 11. Exportar a CSV
+## 8. Exportar a CSV
 
 El botón **Exportar CSV** guarda en la carpeta del ejecutable un archivo con
 el nombre `captura_<timestamp>.csv` que contiene únicamente los paquetes
@@ -409,7 +230,7 @@ resaltadas en rojo.
 
 ---
 
-## 12. Cambio de tema visual
+## 9. Cambio de tema visual
 
 El botón **Modo Claro / Modo Oscuro** en la barra de menú alterna entre
 los dos temas disponibles. El cambio es inmediato y afecta toda la interfaz.
@@ -421,7 +242,7 @@ los dos temas disponibles. El cambio es inmediato y afecta toda la interfaz.
 
 ---
 
-## 13. Código de colores por protocolo
+## 10. Código de colores por protocolo
 
 Las filas de la tabla tienen un color de fondo tenue que identifica visualmente
 el protocolo de cada paquete:
@@ -438,7 +259,7 @@ el protocolo de cada paquete:
 
 ---
 
-## 14. Preguntas frecuentes
+## 11. Preguntas frecuentes
 
 **¿Por qué la lista de interfaces aparece vacía?**
 Npcap no está instalado o no se activó la opción _WinPcap API-compatible Mode_
@@ -463,31 +284,3 @@ afectados por este botón.
 **¿El CSV incluye paquetes ocultos por los filtros?**
 No. El CSV exporta exactamente lo que se ve en la tabla en el momento de
 presionar el botón, respetando todos los filtros activos.
-
-**¿La alerta de SYN Flood significa que estoy siendo atacado?**
-No necesariamente. Servidores web con muchas conexiones simultáneas pueden
-generar muchos SYN legítimos. La alerta es un indicador que debe interpretarse
-junto con el contexto de la red.
-
-**¿Por qué algunas filas se ven en rojo y otras no, si la alerta está activa?**
-Solo se resaltan en rojo las filas cuya IP origen acumula, por sí sola, más
-de la mitad del umbral de SYN configurado dentro de la ventana actual. Si la
-alerta se disparó por la suma de muchas IPs con poca actividad individual
-cada una, es posible que ninguna fila alcance ese nivel y por lo tanto no se
-vea resaltado en rojo aunque el banner de alerta esté visible.
-
-**¿Dónde encuentro el reporte generado tras una alerta?**
-En la misma carpeta donde está `sniffer.exe`, con el nombre
-`reporte_ids_<timestamp_unix>.txt`. Revisa la sección 10 para el detalle de
-su contenido.
-
-**¿Se genera un reporte por cada paquete SYN o por cada alerta?**
-Por cada alerta. Se genera una sola vez cuando el contador global supera el
-umbral por primera vez en una ventana; no se crean reportes adicionales
-mientras la alerta siga activa.
-
-**¿Puedo cambiar el umbral o la ventana del IDS?**
-Actualmente solo desde el código fuente, modificando las constantes
-`SYN_UMBRAL` y `SYN_VENTANA_SEG` antes de recompilar. El umbral usado para
-decidir el resaltado por IP (la mitad de `SYN_UMBRAL`) se ajusta
-automáticamente junto con `SYN_UMBRAL`.
